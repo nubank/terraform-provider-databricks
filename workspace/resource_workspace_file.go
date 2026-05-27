@@ -1,3 +1,4 @@
+// file: workspace/resource_workspace_file.go     
 package workspace
 
 import (
@@ -5,8 +6,8 @@ import (
 	"context"
 	"log"
 	"path/filepath"
+	"strings"
 
-	"github.com/databricks/databricks-sdk-go/apierr"
 	"github.com/databricks/databricks-sdk-go/service/workspace"
 	"github.com/databricks/terraform-provider-databricks/common"
 
@@ -19,7 +20,7 @@ func workspaceFileUploadOptionFunc(i *workspace.Import) {
 	i.ForceSendFields = []string{"Content"}
 }
 
-// ResourceWorkspaceFile manages files in workspace
+
 func ResourceWorkspaceFile() common.Resource {
 	s := FileContentSchema(map[string]*schema.Schema{
 		"url": {
@@ -54,23 +55,38 @@ func ResourceWorkspaceFile() common.Resource {
 				return err
 			}
 			path := d.Get("path").(string)
+			
+			
 			err = client.Workspace.Upload(ctx, path, bytes.NewReader(content), workspaceFileUploadOptionFunc)
 			if err != nil {
-				// If upload failed, check if the parent folder is missing and create it.
 				parent := filepath.ToSlash(filepath.Dir(path))
+				
+				
 				_, errStatus := client.Workspace.GetStatusByPath(ctx, parent)
-				if errStatus != nil && apierr.IsMissing(errStatus) {
-					log.Printf("[DEBUG] Parent folder '%s' doesn't exist, creating...", parent)
-					if errStatus = client.Workspace.MkdirsByPath(ctx, parent); errStatus != nil {
-						return errStatus
+				if errStatus != nil {
+					log.Printf("[DEBUG] Parent folder '%s' check failed, executing concurrent safe mkdirs...", parent)
+					
+					
+					errMkdir := client.Workspace.Mkdirs(ctx, workspace.Mkdirs{Path: parent})
+					if errMkdir != nil {
+						errStr := strings.ToUpper(errMkdir.Error())
+						if !strings.Contains(errStr, "RESOURCE_ALREADY_EXISTS") && 
+						   !strings.Contains(errStr, "ALREADY_EXISTS") {
+							return errMkdir
+						}
 					}
+					
 					err = client.Workspace.Upload(ctx, path, bytes.NewReader(content), workspaceFileUploadOptionFunc)
-				}
-				if err != nil {
+					if err != nil {
+						return err
+					}
+				} else {
+					
 					return err
 				}
 			}
-			d.SetId(path)
+			
+			d.SetId(path)   
 			return nil
 		},
 		Read: func(ctx context.Context, d *schema.ResourceData, c *common.DatabricksClient) error {
